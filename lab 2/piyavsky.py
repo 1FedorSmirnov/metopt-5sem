@@ -1,30 +1,3 @@
-"""
-Лабораторная работа 2 «Метод ломаных» (метод Пиявского).
-
-Программа ищет глобальный минимум липшицевой функции W(x) на отрезке [a, b] с точностью eps.
-
-Ввод - с клавиатуры (python piyavsky.py, программа сама спросит) или четырьмя аргументами:
-    python piyavsky.py "x + sin(3.14159*x)" -1.3 4.5 0.01
-  функция - формула от x, например 4*x + cos(9*pi*x). Умножение только со знаком: 4*x, а не 4x.
-            Степень ^ или **, можно sin, cos, tan, exp, log, sqrt, abs, pi, e. «f(x) =» не обязательно.
-            В командной строке функция в кавычках, с клавиатуры - без кавычек;
-  a, b    - концы отрезка, a < b;
-  eps     - точность, eps > 0. Дробные числа - с точкой или с запятой: 0.01 или 0,01.
-
-Обозначения как на лекции:
-  W(x)                              - исходная функция;
-  u_n                               - точки, где посчитана W (верхние вершины ломаной);
-  g_n(x, u_n) = W(u_n) - L|x - u_n| - основной конструкционный элемент ломаной («галочка»);
-  p_n(x) = max{p_(n-1)(x), g_n(x)}  - ломаная n-го порядка, миноранта: она нигде не выше W(x);
-  нижняя вершина                    - точка пересечения двух соседних галочек.
-
-Ход метода:
-  1) оцениваем константу Липшица L - насколько круто может меняться W;
-  2) итерации 0 и 1: u_0 = a, u_1 = b, ломаная p_1(x) = max{g_0, g_1};
-  3) следующая точка u_n - нижняя вершина с наименьшим значением ломаной;
-  4) если |W(u_n) - p_(n-1)(u_n)| < eps, то останов: u* = u_n, W* = W(u_n);
-  5) иначе добавляем галочку g_n: она заменяет нижнюю вершину u_n двумя новыми, и снова п. 3.
-"""
 import ast
 import sys
 import time
@@ -32,7 +5,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
-K = 1.5           # запас для L: оценка по сетке немного занижена, поэтому умножаем на K
+K = 1.5           # запас для L (K > 1): по сетке наклон немного занижен, поэтому умножаем на K
 GRID = 10000      # на сколько частей делим отрезок при оценке L
 MAX_ITER = 5000   # предел итераций, чтобы при очень маленьком eps программа не работала вечно
 
@@ -58,9 +31,7 @@ def make_function(text):
 
 
 def estimate_lipschitz(W, a, b, k=K):
-    """Оценка константы Липшица: наибольший наклон W между соседними точками мелкой сетки,
-    то есть численная производная max|W'(x)|, умноженная на запас k.
-    Сетка нужна только для L, минимум по ней не ищется."""
+    """Оценка константы Липшица"""
     xs = np.linspace(a, b, GRID + 1)
     ys = np.array([W(x) for x in xs])
     if not np.all(np.isfinite(ys)):
@@ -71,46 +42,63 @@ def estimate_lipschitz(W, a, b, k=K):
 
 def lower_vertex(uq, Wq, uv, Wv, L):
     """Нижняя вершина между соседними верхними вершинами (uq, Wq) и (uv, Wv), uq < uv.
-    Это пересечение правой ветви галочки g_q:  W(uq) - L(x - uq)
-                   и левой ветви галочки g_v:   W(uv) + L(x - uv).
-    Приравниваем их и получаем формулу с лекции: x = (uq + uv)/2 + (W(uq) - W(uv))/(2L)."""
+    Это пересечение правой ветви g_q:  W(uq) - L(x - uq)
+                   и левой ветви g_v:   W(uv) + L(x - uv).
+    Приравниваем их и получаем: x = (uq + uv)/2 + (W(uq) - W(uv))/(2L)."""
     x = (uq + uv) / 2 + (Wq - Wv) / (2 * L)
     p = (Wq + Wv) / 2 - L * (uv - uq) / 2      # значение ломаной в этой вершине
     return x, p
 
 
+def lower_vertices(us, Ws, L):
+    """Все нижние вершины заново: по одной между каждыми соседними верхними вершинами."""
+    return [lower_vertex(us[j], Ws[j], us[j + 1], Ws[j + 1], L) for j in range(len(us) - 1)]
+
+
 def piyavsky(W, a, b, L, eps):
-    """Метод ломаных. Возвращает u*, W*, номер последней итерации, все посчитанные точки
-    в порядке вычисления (u_n, W(u_n), p_(n-1)(u_n)) и признак, что L не оказалась занижена."""
+    """Метод ломаных. Возвращает номер лучшей точки, все посчитанные точки в порядке
+    вычисления (u_n, W(u_n), p_(n-1)(u_n)), итоговую L (которая могла вырасти), статус завершения
+    и примерный минимум итоговой ломаной: настоящий минимум W лежит между ним и найденным W*."""
     us, Ws = [a, b], [W(a), W(b)]                    # верхние вершины по возрастанию u
-    lows = [lower_vertex(a, Ws[0], b, Ws[1], L)]     # lows[i] лежит между us[i] и us[i+1]
-    points = [(a, Ws[0], None), (b, Ws[1], None)]    # итерации 0 и 1: концы отрезка
-    L_ok = True
+    lows = lower_vertices(us, Ws, L)                 # lows[i] лежит между us[i] и us[i+1]
+    points = [(a, Ws[0], None), (b, Ws[1], None)]    # первые две итерации: концы отрезка
+    status = "max_iter"
     for n in range(2, MAX_ITER + 1):
-        # нижняя вершина с наименьшим значением ломаной: только здесь W может быть ниже всего
+        # нижняя вершина с наименьшим значением ломаной
         i = min(range(len(lows)), key=lambda j: lows[j][1])
         u, p = lows[i]
+        # проверки новой точки: внутри своего участка, не посчитана раньше, W(u) - число
+        if not us[i] <= u <= us[i + 1]:
+            raise ValueError(f"нижняя вершина {u} вне участка [{us[i]}, {us[i + 1]}]")
+        if u == us[i] or u == us[i + 1]:              # повтор: участок сжался до точности чисел
+            status = "repeat"
+            break
         Wu = W(u)
+        if not np.isfinite(Wu):
+            raise ValueError(f"W({u}) = {Wu}: функция не определена в этой точке")
         points.append((u, Wu, p))
-        if abs(Wu - p) < eps:                         # ломаная прижалась к W в своей низшей точке
-            return u, Wu, n, points, L_ok
-        # если между точками W меняется круче L, ломаная может пересечь график: L занижена
-        if abs(Wu - Ws[i]) > L * (u - us[i]) or abs(Ws[i + 1] - Wu) > L * (us[i + 1] - u):
-            L_ok = False
-        # новая верхняя вершина встаёт между us[i] и us[i+1],
-        # а её галочка заменяет нижнюю вершину i двумя новыми
+        # новая верхняя вершина встаёт между us[i] и us[i+1]
         us.insert(i + 1, u)
         Ws.insert(i + 1, Wu)
+        # если хорда от новой точки до соседней круче L, ломаная может пересечь график
+        slope = max(abs(Wu - Ws[i]) / (u - us[i]), abs(Ws[i + 2] - Wu) / (us[i + 2] - u))
+        if slope > L:
+            L = K * slope                     # L занижена: увеличиваем с тем же запасом K
+            lows = lower_vertices(us, Ws, L)  # старые вершины построены по старой L
+            continue                          # p тоже по старой L, по ней останавливаться нельзя
+        if abs(Wu - p) < eps:                 # ломаная прижалась к W в своей низшей точке
+            status = "eps"
+            break
+        # галочка новой точки заменяет нижнюю вершину i двумя новыми
         lows[i:i + 1] = [lower_vertex(us[i], Ws[i], u, Wu, L),
                          lower_vertex(u, Wu, us[i + 2], Ws[i + 2], L)]
-    print(f"Точность eps не достигнута за {MAX_ITER} итераций, ответ - лучшая найденная точка")
-    u, Wu, p = min(points, key=lambda t: t[1])
-    return u, Wu, MAX_ITER, points, L_ok
+    best = min(range(len(points)), key=lambda k: points[k][1])   # лучшая точка за все итерации
+    p_min = min(p for x, p in lows)
+    return best, points, L, status, p_min
 
 
 def polyline(points, L):
-    """Вершины ломаной по порядку слева направо: верхняя, нижняя, верхняя, ...
-    Ломаная рисуется прямо по ним, сетка не нужна."""
+    """Вершины ломаной по порядку слева направо: верхняя, нижняя, верхняя, ..."""
     pts = sorted((u, Wu) for u, Wu, p in points)
     xs, ys = [pts[0][0]], [pts[0][1]]
     for (uq, Wq), (uv, Wv) in zip(pts, pts[1:]):
@@ -120,10 +108,13 @@ def polyline(points, L):
     return xs, ys
 
 
-def print_report(text, a, b, eps, L, u, Wu, n, points, L_ok, t_L, t_method):
-    """Вывод результата и таблицы итераций в консоль."""
+def print_report(text, a, b, eps, L0, L, best, points, status, p_min, t_L, t_method):
+    """Вывод результата и таблицы итераций в консоль. L0 - оценка L до метода, L - после."""
+    n = len(points) - 1
     print(f"\nW(x) = {text.split('=')[-1].strip()},  [a, b] = [{a:g}, {b:g}],  eps = {eps:g}")
-    print(f"Константа Липшица: L = {L:.4f} (наибольший наклон {L / K:.4f}, запас K = {K})")
+    print(f"Константа Липшица: L = {L0:.4f} (наибольший наклон {L0 / K:.4f}, запас K = {K})")
+    if L != L0:
+        print(f"Хорда между посчитанными точками оказалась круче L, L увеличена до {L:.4f}")
     print("\n   n          u_n       W(u_n)  p_(n-1)(u_n)     delta")
     rows = list(enumerate(points))
     shown = rows if len(rows) <= 15 else rows[:10] + [None] + rows[-4:]
@@ -136,23 +127,35 @@ def print_report(text, a, b, eps, L, u, Wu, n, points, L_ok, t_L, t_method):
             print(f"{k:4d} {uk:12.6f} {Wk:12.6f}   (конец отрезка)")
         else:
             print(f"{k:4d} {uk:12.6f} {Wk:12.6f} {pk:12.6f} {abs(Wk - pk):10.6f}")
-    print(f"\nОстанов: |W(u_{n}) - p_{n - 1}(u_{n})| = {abs(points[-1][1] - points[-1][2]):.6f} < eps")
-    print(f"Ответ: u* = {u:.6f}, W* = {Wu:.6f}")
+    u, Wu = points[best][:2]
+    if status == "eps":
+        print(f"\nОстанов по точности: |W(u_{n}) - p_{n - 1}(u_{n})| = "
+              f"{abs(points[-1][1] - points[-1][2]):.6f} < eps")
+    elif status == "max_iter":
+        print(f"\nОстанов по пределу итераций MAX_ITER = {MAX_ITER}: точность eps не достигнута")
+    else:
+        print("\nОстанов: следующая точка совпала с уже посчитанной, точнее посчитать нельзя, "
+              "точность eps не достигнута")
+    print(f"Ответ: u* = {u:.6f}, W* = {Wu:.6f} (наименьшее W среди посчитанных точек, u_{best})")
+    if status != "eps":
+        print(f"Настоящий минимум не ниже минимума ломаной {p_min:.6f}, "
+              f"ошибка по W не больше {Wu - p_min:.6f}")
     print(f"Итераций: {n} (точки u_0 = a, u_1 = b, ..., u_{n}), вычислений W в методе: {n + 1}")
     print(f"Время: оценка L {t_L * 1000:.2f} мс, метод ломаных {t_method * 1000:.2f} мс")
-    if not L_ok:
-        print("Внимание: W местами круче L, константа Липшица занижена, ответ может быть неверным")
 
 
-def plot_result(W, text, a, b, eps, L, u, Wu, n, points, t_method, file=None):
-    """Сверху: W, итоговая ломаная p_(n-1), на которой достигнута точность, посчитанные
-    точки и найденный минимум. Снизу: как от итерации к итерации убывала delta."""
+def plot_result(W, text, a, b, eps, L, best, points, status, t_method, file=None):
+    """Сверху: W, итоговая ломаная (при останове по точности - p_(n-1), на которой она
+    достигнута), посчитанные точки и найденный минимум. Снизу: как убывала delta."""
+    n = len(points) - 1
+    u, Wu = points[best][:2]
     fig, (top, bottom) = plt.subplots(2, 1, figsize=(10, 7.5), height_ratios=[3, 1])
     xs = np.linspace(a, b, 2000)                     # густые точки только для рисования W
     ys = [W(x) for x in xs]
     top.plot(xs, ys, color="tab:blue", lw=2, label="W(x)")
-    lx, ly = polyline(points[:-1], L)
-    top.plot(lx, ly, color="tab:green", lw=1, label=f"итоговая ломаная p_{n - 1}(x)")
+    m = n - 1 if status == "eps" else n              # порядок итоговой ломаной
+    lx, ly = polyline(points[:m + 1], L)
+    top.plot(lx, ly, color="tab:green", lw=1, label=f"итоговая ломаная p_{m}(x)")
     top.scatter([t[0] for t in points], [t[1] for t in points], s=12, color="black", zorder=4,
                 label="посчитанные точки u_n (верхние вершины)")
     top.scatter([u], [Wu], marker="*", s=300, color="red", zorder=5,
@@ -227,16 +230,16 @@ def main():
     try:
         text, W, a, b, eps = read_input()
         start = time.perf_counter()
-        L = estimate_lipschitz(W, a, b)
+        L0 = estimate_lipschitz(W, a, b)
         t_L = time.perf_counter() - start
         start = time.perf_counter()
-        u, Wu, n, points, L_ok = piyavsky(W, a, b, L, eps)
+        best, points, L, status, p_min = piyavsky(W, a, b, L0, eps)
         t_method = time.perf_counter() - start
     except (ValueError, SyntaxError, TypeError, ZeroDivisionError) as err:
         print("Ошибка:", err)
         return
-    print_report(text, a, b, eps, L, u, Wu, n, points, L_ok, t_L, t_method)
-    plot_result(W, text, a, b, eps, L, u, Wu, n, points, t_method, "result.png")
+    print_report(text, a, b, eps, L0, L, best, points, status, p_min, t_L, t_method)
+    plot_result(W, text, a, b, eps, L, best, points, status, t_method, "result.png")
     plot_iterations(W, text, a, b, L, points, file="iterations.png")
     print("Графики сохранены в result.png и iterations.png")
     plt.show()
